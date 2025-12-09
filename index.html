@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <title>PUBG Klonu (100 Bot) - Kodlama Desteği</title>
+    <style>
+        /* CSS Başlangıç */
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            background-color: #333;
+            overflow: hidden; 
+        }
+        #gameContainer {
+            position: relative;
+            width: 800px; /* Görünüm alanı */
+            height: 600px;
+            overflow: hidden; 
+            border: 2px solid #fff;
+        }
+        #gameCanvas {
+            position: absolute;
+            background-color: #225522; /* Yeşil zemin, harita */
+            transition: transform 0.05s linear; /* Daha yumuşak kaydırma efekti */
+        }
+        .info {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: #fff;
+            font-family: Arial, sans-serif;
+            z-index: 10;
+        }
+    </style>
+</head>
+<body>
+    <div class="info">
+        <p>Bağlantı Durumu: <span id="status">Bağlanılıyor...</span></p>
+        <p>Hareket: **W A S D**</p>
+        <p>Karakter Konumu (x, y): <span id="position">0, 0</span></p>
+        <p>Bot Sayısı: <span id="bot_count">0</span></p>
+    </div>
+    
+    <div id="gameContainer">
+        <canvas id="gameCanvas" width="1000" height="1000"></canvas>
+    </div>
+
+    <script>
+        // JavaScript Başlangıç: Oyun Mantığı ve Ağ Bağlantısı
+
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const container = document.getElementById('gameContainer');
+        const statusEl = document.getElementById('status');
+        const positionEl = document.getElementById('position');
+        const botCountEl = document.getElementById('bot_count');
+
+        // Oyun Değişkenleri
+        let playerX = 0;
+        let playerY = 0;
+        const playerSize = 10;
+        const botSize = 5;
+        let MAP_SIZE = 1000; 
+        
+        let bots = []; // Sunucudan gelen 100 botun konumlarını tutacak liste
+        const heldKeys = {};
+        
+        // WebSocket Bağlantısı
+        const socket = new WebSocket("ws://localhost:8080");
+
+        socket.onopen = () => {
+            statusEl.textContent = "BAĞLANDI";
+            console.log("Sunucuya bağlandı.");
+        };
+
+        socket.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            
+            if (data.type === 'init') {
+                // Başlangıç verilerini al
+                playerX = data.player_pos.x;
+                playerY = data.player_pos.y;
+                MAP_SIZE = data.map_size;
+                botCountEl.textContent = data.bot_count;
+                
+                // Canvas boyutunu harita büyüklüğüne ayarla
+                canvas.width = MAP_SIZE;
+                canvas.height = MAP_SIZE;
+
+            } else if (data.type === 'update') {
+                // Sunucudan gelen güncel durumu al
+                playerX = data.player.x;
+                playerY = data.player.y;
+                bots = data.bots; // 100 botun yeni konumlarını al
+                
+                positionEl.textContent = `${playerX.toFixed(0)}, ${playerY.toFixed(0)}`;
+            }
+        };
+
+        socket.onclose = () => {
+            statusEl.textContent = "BAĞLANTI KOPTU";
+        };
+
+        socket.onerror = (error) => {
+            statusEl.textContent = "HATA";
+            console.error("WebSocket Hatası:", error);
+        };
+
+        // Klavye Kontrolleri
+        document.addEventListener('keydown', (e) => {
+            if (['w', 'a', 's', 'd'].includes(e.key.toLowerCase())) {
+                heldKeys[e.key.toLowerCase()] = true;
+            }
+        });
+
+        document.addEventListener('keyup', (e) => {
+            if (['w', 'a', 's', 'd'].includes(e.key.toLowerCase())) {
+                heldKeys[e.key.toLowerCase()] = false;
+            }
+        });
+        
+        // Sunucuya Hareket Komutu Gönderme
+        function sendMovement() {
+            // Sunucuya hangi tuşun basılı olduğunu gönder (Basit tek yönlü hareket için)
+            let direction = null;
+            if (heldKeys['w']) direction = "up";
+            else if (heldKeys['s']) direction = "down";
+            else if (heldKeys['a']) direction = "left";
+            else if (heldKeys['d']) direction = "right";
+
+            if (direction && socket.readyState === WebSocket.OPEN) {
+                socket.send(JSON.stringify({ type: "move", direction: direction }));
+            }
+        }
+        
+        // Kamera Takibi (PUBG benzeri büyük harita için kritik)
+        function updateCamera() {
+            // Görünüm alanının merkezini hesapla
+            const viewCenterX = container.clientWidth / 2;
+            const viewCenterY = container.clientHeight / 2;
+            
+            // Canvas'ı (haritayı) oyuncunun konumuna göre kaydır
+            
+            // Yeni kamera pozisyonu (Canvas'ın sol üst köşesinin konumu)
+            const cameraX = viewCenterX - playerX;
+            const cameraY = viewCenterY - playerY;
+
+            // Harita sınırlarını aşmamayı sağla
+            // Bu, kenarlara gelince haritanın kaymasını durdurur.
+            let finalX = Math.min(0, Math.max(cameraX, container.clientWidth - MAP_SIZE));
+            let finalY = Math.min(0, Math.max(cameraY, container.clientHeight - MAP_SIZE));
+
+            canvas.style.transform = `translate(${finalX}px, ${finalY}px)`;
+        }
+
+        // Ana Oyun Çizim Döngüsü (Görsel Güncelleme)
+        function gameLoop() {
+            // 1. Temizle
+            ctx.clearRect(0, 0, MAP_SIZE, MAP_SIZE);
+
+            // 2. Harita Zeminini Çiz
+            ctx.fillStyle = "#225522"; // Zemin rengi
+            ctx.fillRect(0, 0, MAP_SIZE, MAP_SIZE);
+            
+            // 3. 100 Botu Çiz
+            ctx.fillStyle = "yellow"; // Botlar sarı
+            bots.forEach(bot => {
+                ctx.beginPath();
+                ctx.arc(bot.x, bot.y, botSize, 0, Math.PI * 2);
+                ctx.fill();
+            });
+            
+            // 4. Oyuncuyu Çiz (Merkezde)
+            ctx.fillStyle = "red";
+            ctx.beginPath();
+            ctx.arc(playerX, playerY, playerSize, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // 5. Kamerayı Güncelle (Kaydırma)
+            updateCamera();
+
+            // 6. Hareketi Sunucuya bildir
+            sendMovement();
+
+            requestAnimationFrame(gameLoop); // Bir sonraki kareyi çiz
+        }
+
+        gameLoop(); // Döngüyü başlat
+
+    </script>
+</body>
+</html>
